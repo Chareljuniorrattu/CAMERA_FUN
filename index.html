@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pelacakan Tangan & Tali</title>
+    <style>
+        /* Gaya untuk membuat halaman menjadi full-screen dan tanpa scroll */
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: black;
+        }
+        #video-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+        #webcam {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover; /* Memastikan video memenuhi layar */
+            transform: scaleX(-1); /* Membalik video agar seperti cermin */
+        }
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none; /* Agar Canvas tidak menghalangi interaksi dengan video */
+            transform: scaleX(-1); /* Membalik overlay agar sejajar dengan video */
+        }
+        .info {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            color: white;
+            font-family: sans-serif;
+            background: rgba(0,0,0,0.6);
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-size: 14px;
+            z-index: 10;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="video-container">
+        <!-- Elemen video untuk kamera -->
+        <video id="webcam" autoplay playsinline></video>
+        <!-- Canvas untuk menggambar -->
+        <canvas id="overlay"></canvas>
+        <div class="info">Tunjukkan kedua telunjuk Anda untuk menarik tali</div>
+    </div>
+
+    <!-- Memuat library MediaPipe Hands -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    
+    <script>
+        (function() {
+            // --- 1. Dapatkan Elemen ---
+            const video = document.getElementById('webcam');
+            const canvas = document.getElementById('overlay');
+            const ctx = canvas.getContext('2d');
+
+            // --- 2. Atur Ukuran Canvas ---
+            function resizeCanvas() {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+            }
+            window.addEventListener('resize', resizeCanvas);
+            resizeCanvas();
+
+            // --- 3. Fungsi untuk Menggambar Tali ---
+            function drawString(landmarksRight, landmarksLeft) {
+                // Hapus gambar sebelumnya
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                // Jika kedua tangan terdeteksi
+                if (landmarksRight && landmarksLeft) {
+                    // Ambil titik ujung jari telunjuk (landmark index 8)
+                    const rightIndexTip = landmarksRight[8];
+                    const leftIndexTip = landmarksLeft[8];
+
+                    // Koordinat kanvas: x = landmark.x * lebar kanvas, y = landmark.y * tinggi kanvas
+                    // Catatan: Karena kita membalik canvas (scaleX(-1)), koordinat x perlu dibalik juga
+                    // Agar tali berada di posisi yang benar. Pendekatan sederhana: gunakan koordinat asli dari MediaPipe.
+                    // MediaPipe memberikan koordinat x dalam rentang 0 (kiri) sampai 1 (kanan) dari perspektif kamera.
+                    const xRight = rightIndexTip.x * canvas.width;
+                    const yRight = rightIndexTip.y * canvas.height;
+                    const xLeft = leftIndexTip.x * canvas.width;
+                    const yLeft = leftIndexTip.y * canvas.height;
+
+                    // Mulai menggambar
+                    ctx.beginPath();
+                    ctx.moveTo(xRight, yRight);
+                    
+                    // Gambar garis lurus
+                    ctx.lineTo(xLeft, yLeft);
+                    
+                    // Gaya garis
+                    ctx.strokeStyle = '#FF3366'; // Warna cerah
+                    ctx.lineWidth = 8;
+                    ctx.shadowColor = '#FF3366';
+                    ctx.shadowBlur = 15;
+                    ctx.stroke();
+
+                    // Gambar lingkaran di ujung-ujungnya agar lebih keren
+                    ctx.shadowBlur = 20;
+                    ctx.fillStyle = '#FFD700';
+                    ctx.beginPath();
+                    ctx.arc(xRight, yRight, 12, 0, 2 * Math.PI);
+                    ctx.fill();
+                    ctx.beginPath();
+                    ctx.arc(xLeft, yLeft, 12, 0, 2 * Math.PI);
+                    ctx.fill();
+                }
+            }
+
+            // --- 4. Inisialisasi MediaPipe Hands ---
+            const hands = new Hands({
+                locateFile: (file) => {
+                    return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+                }
+            });
+
+            hands.setOptions({
+                maxNumHands: 2, // Deteksi dua tangan
+                modelComplexity: 1,
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
+
+            // Variabel untuk menyimpan landmark tangan
+            let rightHandLandmarks = null;
+            let leftHandLandmarks = null;
+
+            // Callback ketika MediaPipe mendapatkan hasil
+            hands.onResults((results) => {
+                // Reset data tangan
+                rightHandLandmarks = null;
+                leftHandLandmarks = null;
+
+                if (results.multiHandLandmarks && results.multiHandedness) {
+                    for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+                        const landmarks = results.multiHandLandmarks[i];
+                        const label = results.multiHandedness[i].label; // "Right" atau "Left"
+
+                        if (label === 'Right') {
+                            rightHandLandmarks = landmarks;
+                        } else if (label === 'Left') {
+                            leftHandLandmarks = landmarks;
+                        }
+                    }
+                }
+
+                // Gambar talinya
+                drawString(rightHandLandmarks, leftHandLandmarks);
+            });
+
+            // --- 5. Mulai Kamera ---
+            const camera = new Camera(video, {
+                onFrame: async () => {
+                    await hands.send({ image: video });
+                },
+                width: 640,
+                height: 480
+            });
+            camera.start();
+
+            console.log('Aplikasi pelacakan tangan siap!');
+        })();
+    </script>
+</body>
+</html>
