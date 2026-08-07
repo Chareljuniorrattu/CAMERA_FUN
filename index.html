@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Pelacakan Tangan - Tali Presisi</title>
+  <title>Tracking Tangan - Debug</title>
   <style>
     body {
       margin: 0;
@@ -22,7 +22,8 @@
       width: 100%;
       height: 100%;
       object-fit: cover;
-      transform: scaleX(-1);
+      /* Hapus mirror dulu untuk debugging */
+      /* transform: scaleX(-1); */
     }
     #overlay {
       position: absolute;
@@ -31,7 +32,6 @@
       width: 100%;
       height: 100%;
       pointer-events: none;
-      /* JANGAN DI BALIK DI SINI! Kita akan balik secara manual di JS */
     }
     .info {
       position: absolute;
@@ -39,12 +39,26 @@
       left: 20px;
       color: white;
       font-family: sans-serif;
-      background: rgba(0,0,0,0.6);
-      padding: 10px 15px;
+      background: rgba(0,0,0,0.7);
+      padding: 15px 20px;
       border-radius: 8px;
       font-size: 14px;
       z-index: 10;
       pointer-events: none;
+      line-height: 1.6;
+    }
+    .debug-info {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      color: #0f0;
+      font-family: monospace;
+      font-size: 14px;
+      z-index: 10;
+      pointer-events: none;
+      background: rgba(0,0,0,0.7);
+      padding: 10px 15px;
+      border-radius: 4px;
     }
     .fps-counter {
       position: absolute;
@@ -65,28 +79,36 @@
   <div id="video-container">
     <video id="webcam" autoplay playsinline></video>
     <canvas id="overlay"></canvas>
-    <div class="info">Tunjukkan kedua telunjuk Anda</div>
+    <div class="debug-info" id="debugInfo">⏳ Menunggu kamera...</div>
+    <div class="info">
+      <b>🖐️ Mode Debug</b><br>
+      • Titik hijau = ujung jari telunjuk<br>
+      • Titik merah = semua landmark tangan<br>
+      • Garis biru = koneksi antar landmark
+    </div>
     <div class="fps-counter" id="fps">FPS: 0</div>
   </div>
 
+  <!-- Library MediaPipe -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
   
   <script>
     (function() {
+      // --- ELEMEN ---
       const video = document.getElementById('webcam');
       const canvas = document.getElementById('overlay');
       const ctx = canvas.getContext('2d');
       const fpsDisplay = document.getElementById('fps');
+      const debugInfo = document.getElementById('debugInfo');
 
-      // --- UKURAN CANVAS SAMA DENGAN VIDEO ---
-      let canvasWidth = 640;
-      let canvasHeight = 480;
+      // --- UKURAN CANVAS ---
+      let canvasWidth, canvasHeight;
       
       function resizeCanvas() {
-        // Canvas menggunakan resolusi tetap untuk konsistensi
-        canvasWidth = Math.min(window.innerWidth, 640);
-        canvasHeight = Math.min(window.innerHeight, 480);
+        canvasWidth = window.innerWidth;
+        canvasHeight = window.innerHeight;
         canvas.width = canvasWidth;
         canvas.height = canvasHeight;
         canvas.style.width = '100%';
@@ -95,72 +117,113 @@
       window.addEventListener('resize', resizeCanvas);
       resizeCanvas();
 
-      let rightHandLandmarks = null;
-      let leftHandLandmarks = null;
+      // --- VARIABEL ---
+      let handLandmarks = [];
+      let handLabels = [];
       let frameCount = 0;
       let lastFpsUpdate = performance.now();
+      let detectionStatus = '⏳ Menunggu deteksi...';
 
-      // --- FUNGSI GAMBAR TALI (DENGAN KOORDINAT YANG BENAR) ---
-      function drawString() {
+      // --- FUNGSI GAMBAR LANDMARK ---
+      function drawLandmarks() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        if (rightHandLandmarks && leftHandLandmarks) {
-          const rightIndex = rightHandLandmarks[8];
-          const leftIndex = leftHandLandmarks[8];
+        if (handLandmarks.length === 0) {
+          // Gambar teks "Tidak ada tangan terdeteksi"
+          ctx.fillStyle = 'rgba(255,255,255,0.5)';
+          ctx.font = '24px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('✋ Tunjukkan tangan Anda', canvas.width/2, canvas.height/2);
+          return;
+        }
 
-          // 🔥 PERBAIKAN UTAMA: Balik koordinat X agar sesuai dengan video mirror
-          // MediaPipe memberi koordinat 0-1 (0=kiri asli, 1=kanan asli)
-          // Karena video di-mirror, kita balik: x = 1 - x
-          const xRight = (1 - rightIndex.x) * canvas.width;
-          const yRight = rightIndex.y * canvas.height;
-          const xLeft = (1 - leftIndex.x) * canvas.width;
-          const yLeft = leftIndex.y * canvas.height;
+        // Loop setiap tangan yang terdeteksi
+        for (let h = 0; h < handLandmarks.length; h++) {
+          const landmarks = handLandmarks[h];
+          const label = handLabels[h] || 'Unknown';
 
-          // Gambar tali
-          ctx.beginPath();
-          ctx.moveTo(xRight, yRight);
-          ctx.lineTo(xLeft, yLeft);
-          ctx.strokeStyle = '#FF3366';
-          ctx.lineWidth = 8;
-          ctx.shadowColor = '#FF3366';
-          ctx.shadowBlur = 20;
-          ctx.stroke();
+          // Gambar semua titik landmark (merah)
+          for (let i = 0; i < landmarks.length; i++) {
+            const lm = landmarks[i];
+            const x = lm.x * canvas.width;
+            const y = lm.y * canvas.height;
 
-          // Lingkaran di ujung
-          ctx.shadowBlur = 25;
-          ctx.fillStyle = '#FFD700';
-          ctx.beginPath();
-          ctx.arc(xRight, yRight, 14, 0, 2 * Math.PI);
-          ctx.fill();
-          ctx.beginPath();
-          ctx.arc(xLeft, yLeft, 14, 0, 2 * Math.PI);
-          ctx.fill();
+            // Titik kecil untuk semua landmark
+            ctx.beginPath();
+            ctx.arc(x, y, 4, 0, 2 * Math.PI);
+            ctx.fillStyle = '#FF0000';
+            ctx.fill();
+            
+            // Tambahkan nomor landmark
+            ctx.fillStyle = 'rgba(255,255,255,0.5)';
+            ctx.font = '10px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(i, x + 10, y - 5);
+          }
 
-          // Tambahan: Gambar titik di semua jari untuk debugging
-          // Bisa dihapus jika sudah yakin
-          ctx.shadowBlur = 0;
-          ctx.fillStyle = 'rgba(0, 255, 0, 0.3)';
-          if (rightHandLandmarks) {
-            for (let i = 0; i < rightHandLandmarks.length; i++) {
-              const lm = rightHandLandmarks[i];
-              const x = (1 - lm.x) * canvas.width;
-              const y = lm.y * canvas.height;
+          // Gambar koneksi antar landmark (garis biru transparan)
+          const connections = [
+            [0,1], [1,2], [2,3], [3,4], // Ibu jari
+            [0,5], [5,6], [6,7], [7,8], // Telunjuk
+            [0,9], [9,10], [10,11], [11,12], // Jari tengah
+            [0,13], [13,14], [14,15], [15,16], // Jari manis
+            [0,17], [17,18], [18,19], [19,20], // Kelingking
+            [5,9], [9,13], [13,17] // Telapak tangan
+          ];
+
+          ctx.strokeStyle = 'rgba(0, 150, 255, 0.3)';
+          ctx.lineWidth = 1;
+          for (let conn of connections) {
+            const lm1 = landmarks[conn[0]];
+            const lm2 = landmarks[conn[1]];
+            if (lm1 && lm2) {
               ctx.beginPath();
-              ctx.arc(x, y, 3, 0, 2 * Math.PI);
-              ctx.fill();
+              ctx.moveTo(lm1.x * canvas.width, lm1.y * canvas.height);
+              ctx.lineTo(lm2.x * canvas.width, lm2.y * canvas.height);
+              ctx.stroke();
             }
           }
-          if (leftHandLandmarks) {
-            for (let i = 0; i < leftHandLandmarks.length; i++) {
-              const lm = leftHandLandmarks[i];
-              const x = (1 - lm.x) * canvas.width;
-              const y = lm.y * canvas.height;
-              ctx.beginPath();
-              ctx.arc(x, y, 3, 0, 2 * Math.PI);
-              ctx.fill();
-            }
+
+          // Gambar ujung jari telunjuk (landmark 8) dengan lingkaran BESAR HIJAU
+          const indexTip = landmarks[8];
+          if (indexTip) {
+            const x = indexTip.x * canvas.width;
+            const y = indexTip.y * canvas.height;
+            
+            // Lingkaran hijau besar dengan efek glow
+            ctx.shadowColor = '#00FF00';
+            ctx.shadowBlur = 30;
+            ctx.beginPath();
+            ctx.arc(x, y, 20, 0, 2 * Math.PI);
+            ctx.fillStyle = 'rgba(0, 255, 0, 0.7)';
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = '#FFFFFF';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+            
+            // Tulisan "Telunjuk"
+            ctx.fillStyle = '#FFFFFF';
+            ctx.font = 'bold 14px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('👆 TELUNJUK', x, y - 30);
+          }
+
+          // Tampilkan label tangan
+          const wrist = landmarks[0];
+          if (wrist) {
+            const x = wrist.x * canvas.width;
+            const y = wrist.y * canvas.height - 40;
+            ctx.fillStyle = 'rgba(0, 255, 255, 0.9)';
+            ctx.font = 'bold 16px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(`🖐️ ${label} Hand`, x, y);
           }
         }
+
+        // Update status
+        detectionStatus = `✅ ${handLandmarks.length} tangan terdeteksi`;
+        debugInfo.textContent = detectionStatus;
       }
 
       // --- INISIALISASI MEDIAPIPE ---
@@ -172,30 +235,27 @@
 
       hands.setOptions({
         maxNumHands: 2,
-        modelComplexity: 0,
-        minDetectionConfidence: 0.7,
-        minTrackingConfidence: 0.6
+        modelComplexity: 0, // Pakai model ringan
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
       });
 
       hands.onResults((results) => {
-        rightHandLandmarks = null;
-        leftHandLandmarks = null;
+        // Reset data
+        handLandmarks = [];
+        handLabels = [];
 
         if (results.multiHandLandmarks && results.multiHandedness) {
           for (let i = 0; i < results.multiHandLandmarks.length; i++) {
-            const landmarks = results.multiHandLandmarks[i];
-            const label = results.multiHandedness[i].label;
-
-            if (label === 'Right') {
-              rightHandLandmarks = landmarks;
-            } else if (label === 'Left') {
-              leftHandLandmarks = landmarks;
-            }
+            handLandmarks.push(results.multiHandLandmarks[i]);
+            handLabels.push(results.multiHandedness[i].label);
           }
         }
 
-        drawString();
+        // Gambar landmark
+        drawLandmarks();
 
+        // Update FPS
         frameCount++;
         const now = performance.now();
         if (now - lastFpsUpdate > 1000) {
@@ -205,18 +265,31 @@
         }
       });
 
-      // --- KAMERA ---
+      // --- MULAI KAMERA ---
+      debugInfo.textContent = '📷 Memulai kamera...';
+      
       const camera = new Camera(video, {
         onFrame: async () => {
-          await hands.send({ image: video });
+          try {
+            await hands.send({ image: video });
+          } catch (error) {
+            console.error('Error processing frame:', error);
+          }
         },
-        width: 320,
-        height: 240,
+        width: 640,
+        height: 480,
         facingMode: "user"
       });
-      camera.start();
 
-      console.log('✅ Tali presisi dengan koordinat mirror siap!');
+      camera.start().then(() => {
+        debugInfo.textContent = '📷 Kamera aktif, menunggu tangan...';
+        console.log('✅ Kamera berhasil dimulai');
+      }).catch((error) => {
+        debugInfo.textContent = '❌ Gagal akses kamera: ' + error.message;
+        console.error('Camera error:', error);
+      });
+
+      console.log('🔍 Mode Debug Tracking Tangan Aktif');
     })();
   </script>
 </body>
