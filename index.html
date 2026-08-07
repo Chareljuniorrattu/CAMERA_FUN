@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TEST - Tracking Tangan</title>
+    <title>Efek Tali - Manual Tracking</title>
     <style>
         * {
             margin: 0;
@@ -17,11 +17,16 @@
             position: relative;
             width: 100vw;
             height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: #1a1a2e;
         }
         #webcam {
             width: 100%;
             height: 100%;
             object-fit: cover;
+            transform: scaleX(-1);
         }
         #overlay {
             position: absolute;
@@ -30,33 +35,47 @@
             width: 100%;
             height: 100%;
             pointer-events: none;
+            transform: scaleX(-1);
         }
-        #info {
+        .info {
             position: fixed;
             bottom: 30px;
             left: 50%;
             transform: translateX(-50%);
-            color: white;
             background: rgba(0,0,0,0.8);
-            padding: 15px 25px;
-            border-radius: 10px;
+            color: #fff;
+            padding: 12px 24px;
+            border-radius: 30px;
             font-family: Arial, sans-serif;
-            font-size: 16px;
+            font-size: 14px;
             z-index: 100;
+            border: 2px solid #FF3366;
             text-align: center;
-            border: 2px solid #00ff00;
         }
-        #status {
+        .status {
             position: fixed;
             top: 20px;
             left: 20px;
             color: #0f0;
             font-family: monospace;
+            font-size: 13px;
+            z-index: 100;
+            background: rgba(0,0,0,0.7);
+            padding: 10px 15px;
+            border-radius: 5px;
+            line-height: 1.6;
+        }
+        .fps {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            color: #0f0;
+            font-family: monospace;
             font-size: 14px;
             z-index: 100;
             background: rgba(0,0,0,0.7);
-            padding: 10px;
-            border-radius: 5px;
+            padding: 5px 12px;
+            border-radius: 4px;
         }
     </style>
 </head>
@@ -65,118 +84,200 @@
         <video id="webcam" autoplay playsinline></video>
         <canvas id="overlay"></canvas>
     </div>
-    <div id="status">⏳ Memulai...</div>
-    <div id="info">🔴 Titik MERAH di ujung jari telunjuk | Gerakkan jari untuk test</div>
+    <div class="status" id="status">⏳ Memulai...</div>
+    <div class="fps" id="fps">FPS: 0</div>
+    <div class="info">🎯 Tunjukkan 2 telunjuk untuk tarik tali | Seperti video manual tracking</div>
 
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 
     <script>
-        // --- AMBIL ELEMEN ---
-        const video = document.getElementById('webcam');
-        const canvas = document.getElementById('overlay');
-        const ctx = canvas.getContext('2d');
-        const status = document.getElementById('status');
+        (function() {
+            // --- ELEMEN ---
+            const video = document.getElementById('webcam');
+            const canvas = document.getElementById('overlay');
+            const ctx = canvas.getContext('2d');
+            const statusEl = document.getElementById('status');
+            const fpsEl = document.getElementById('fps');
 
-        // --- SETUP CANVAS ---
-        function resizeCanvas() {
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight;
-        }
-        window.addEventListener('resize', resizeCanvas);
-        resizeCanvas();
-
-        // --- VARIABEL ---
-        let tipX = 0;
-        let tipY = 0;
-        let detected = false;
-
-        // --- FUNGSI GAMBAR ---
-        function draw() {
-            // Bersihkan canvas
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-            if (detected) {
-                // Gambar titik MERAH di ujung jari
-                ctx.shadowColor = '#FF0000';
-                ctx.shadowBlur = 30;
-                ctx.beginPath();
-                ctx.arc(tipX, tipY, 20, 0, 2 * Math.PI);
-                ctx.fillStyle = '#FF0000';
-                ctx.fill();
-                ctx.shadowBlur = 0;
-                ctx.strokeStyle = '#FFFFFF';
-                ctx.lineWidth = 2;
-                ctx.stroke();
-
-                // Tulisan
-                ctx.fillStyle = '#FFFFFF';
-                ctx.font = 'bold 20px Arial';
-                ctx.textAlign = 'center';
-                ctx.fillText('👆 TITIK INI', tipX, tipY - 35);
-                
-                status.textContent = '✅ Tangan terdeteksi!';
-            } else {
-                ctx.fillStyle = 'rgba(255,255,255,0.3)';
-                ctx.font = '30px Arial';
-                ctx.textAlign = 'center';
-                ctx.fillText('✋ Tunjukkan tangan Anda', canvas.width/2, canvas.height/2);
-                status.textContent = '⏳ Menunggu tangan...';
+            // --- RESIZE CANVAS ---
+            function resizeCanvas() {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
             }
-        }
+            window.addEventListener('resize', resizeCanvas);
+            resizeCanvas();
 
-        // --- MEDIAPIPE ---
-        const hands = new Hands({
-            locateFile: (file) => {
-                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+            // --- VARIABEL ---
+            let rightTip = null;  // Ujung telunjuk kanan (landmark 8)
+            let leftTip = null;   // Ujung telunjuk kiri (landmark 8)
+            let rightHand = null;
+            let leftHand = null;
+            let frameCount = 0;
+            let lastFpsUpdate = performance.now();
+
+            // --- FUNGSI GAMBAR TALI ---
+            function draw() {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                // Jika kedua tangan terdeteksi
+                if (rightTip && leftTip) {
+                    // 🔥 Koordinat sudah di-mirror di callback
+                    const x1 = rightTip.x * canvas.width;
+                    const y1 = rightTip.y * canvas.height;
+                    const x2 = leftTip.x * canvas.width;
+                    const y2 = leftTip.y * canvas.height;
+
+                    // --- GAMBAR TALI (garis) ---
+                    ctx.shadowColor = '#FF3366';
+                    ctx.shadowBlur = 25;
+                    ctx.beginPath();
+                    ctx.moveTo(x1, y1);
+                    ctx.lineTo(x2, y2);
+                    ctx.strokeStyle = '#FF3366';
+                    ctx.lineWidth = 8;
+                    ctx.stroke();
+
+                    // --- LINGKARAN DI UJUNG TALI ---
+                    ctx.shadowBlur = 30;
+                    
+                    // Lingkaran kanan (merah)
+                    ctx.beginPath();
+                    ctx.arc(x1, y1, 18, 0, 2 * Math.PI);
+                    ctx.fillStyle = '#FF3366';
+                    ctx.fill();
+                    ctx.strokeStyle = '#FFFFFF';
+                    ctx.lineWidth = 3;
+                    ctx.stroke();
+                    
+                    // Lingkaran kiri (biru)
+                    ctx.beginPath();
+                    ctx.arc(x2, y2, 18, 0, 2 * Math.PI);
+                    ctx.fillStyle = '#00D4FF';
+                    ctx.fill();
+                    ctx.strokeStyle = '#FFFFFF';
+                    ctx.lineWidth = 3;
+                    ctx.stroke();
+
+                    // --- TEKS ---
+                    ctx.shadowBlur = 0;
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.font = 'bold 14px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('👉 Kanan', x1, y1 - 30);
+                    ctx.fillText('👈 Kiri', x2, y2 - 30);
+
+                    statusEl.textContent = '✅ Tali aktif! 2 tangan terdeteksi';
+                } 
+                else if (rightTip || leftTip) {
+                    // Hanya 1 tangan terdeteksi
+                    const tip = rightTip || leftTip;
+                    const x = tip.x * canvas.width;
+                    const y = tip.y * canvas.height;
+                    
+                    ctx.shadowColor = '#FFD700';
+                    ctx.shadowBlur = 20;
+                    ctx.beginPath();
+                    ctx.arc(x, y, 15, 0, 2 * Math.PI);
+                    ctx.fillStyle = '#FFD700';
+                    ctx.fill();
+                    ctx.shadowBlur = 0;
+                    
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.font = '18px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('👆 Tunjukkan tangan satunya', x, y - 30);
+                    
+                    statusEl.textContent = '⏳ Tunggu tangan kedua...';
+                } 
+                else {
+                    // Tidak ada tangan
+                    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+                    ctx.font = '28px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('✋ Tunjukkan 2 jari telunjuk', canvas.width/2, canvas.height/2);
+                    statusEl.textContent = '⏳ Menunggu tangan...';
+                }
             }
-        });
 
-        hands.setOptions({
-            maxNumHands: 1, // Hanya 1 tangan dulu biar simpel
-            modelComplexity: 0,
-            minDetectionConfidence: 0.5,
-            minTrackingConfidence: 0.5
-        });
+            // --- MEDIAPIPE ---
+            const hands = new Hands({
+                locateFile: (file) => {
+                    return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+                }
+            });
 
-        hands.onResults((results) => {
-            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                const landmarks = results.multiHandLandmarks[0];
-                // Landmark 8 = ujung jari telunjuk
-                const tip = landmarks[8];
-                
-                // Konversi ke koordinat canvas
-                tipX = tip.x * canvas.width;
-                tipY = tip.y * canvas.height;
-                detected = true;
-            } else {
-                detected = false;
-            }
-            
-            draw();
-        });
+            hands.setOptions({
+                maxNumHands: 2,
+                modelComplexity: 0,
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
 
-        // --- KAMERA ---
-        status.textContent = '📷 Memulai kamera...';
+            hands.onResults((results) => {
+                // Reset
+                rightTip = null;
+                leftTip = null;
+                rightHand = null;
+                leftHand = null;
 
-        const camera = new Camera(video, {
-            onFrame: async () => {
-                await hands.send({ image: video });
-            },
-            width: 640,
-            height: 480,
-            facingMode: "user"
-        });
+                if (results.multiHandLandmarks && results.multiHandedness) {
+                    for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+                        const landmarks = results.multiHandLandmarks[i];
+                        const label = results.multiHandedness[i].label;
+                        const tip = landmarks[8]; // Ujung telunjuk
 
-        camera.start().then(() => {
-            status.textContent = '📷 Kamera aktif - Tunjukkan tangan!';
-            console.log('✅ Kamera berjalan');
-        }).catch((err) => {
-            status.textContent = '❌ Error: ' + err.message;
-            console.error(err);
-        });
+                        // 🔥 MIRROR koordinat X karena video di-flip
+                        const mirroredTip = {
+                            x: 1 - tip.x,
+                            y: tip.y
+                        };
 
-        console.log('🔍 Test tracking sederhana');
+                        if (label === 'Right') {
+                            rightTip = mirroredTip;
+                            rightHand = landmarks;
+                        } else if (label === 'Left') {
+                            leftTip = mirroredTip;
+                            leftHand = landmarks;
+                        }
+                    }
+                }
+
+                // Gambar
+                draw();
+
+                // FPS
+                frameCount++;
+                const now = performance.now();
+                if (now - lastFpsUpdate > 1000) {
+                    fpsEl.textContent = `FPS: ${frameCount}`;
+                    frameCount = 0;
+                    lastFpsUpdate = now;
+                }
+            });
+
+            // --- KAMERA ---
+            statusEl.textContent = '📷 Memulai kamera...';
+
+            const camera = new Camera(video, {
+                onFrame: async () => {
+                    await hands.send({ image: video });
+                },
+                width: 640,
+                height: 480,
+                facingMode: "user"
+            });
+
+            camera.start().then(() => {
+                statusEl.textContent = '📷 Siap! Tunjukkan 2 jari telunjuk';
+                console.log('✅ Efek tali siap!');
+            }).catch((err) => {
+                statusEl.textContent = '❌ Error: ' + err.message;
+                console.error(err);
+            });
+
+            console.log('🎯 Efek manual tracking siap!');
+        })();
     </script>
 </body>
 </html>
