@@ -3,9 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Pelacakan Tangan & Tali</title>
+  <title>Pelacakan Tangan - Optimasi</title>
   <style>
-    /* Hapus gaya yang tidak perlu dan pastikan body full screen */
     body {
       margin: 0;
       overflow: hidden;
@@ -47,76 +46,98 @@
       z-index: 10;
       pointer-events: none;
     }
+    .fps-counter {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      color: #0f0;
+      font-family: monospace;
+      font-size: 16px;
+      z-index: 10;
+      pointer-events: none;
+      background: rgba(0,0,0,0.5);
+      padding: 5px 10px;
+      border-radius: 4px;
+    }
   </style>
 </head>
 <body>
   <div id="video-container">
     <video id="webcam" autoplay playsinline></video>
     <canvas id="overlay"></canvas>
-    <div class="info">Tunjukkan kedua telunjuk Anda untuk menarik tali</div>
+    <div class="info">Tunjukkan kedua telunjuk Anda</div>
+    <div class="fps-counter" id="fps">FPS: 0</div>
   </div>
 
-  <!-- PASTIKAN: Gunakan versi library yang tepat -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
   
   <script>
     (function() {
+      // --- ELEMEN ---
       const video = document.getElementById('webcam');
       const canvas = document.getElementById('overlay');
       const ctx = canvas.getContext('2d');
+      const fpsDisplay = document.getElementById('fps');
 
+      // --- UKURAN CANVAS (DIKECILKAN UNTUK PERFORMANCE) ---
+      let canvasWidth = 640;
+      let canvasHeight = 480;
+      
       function resizeCanvas() {
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
+        // Gunakan resolusi lebih kecil untuk performa lebih baik
+        canvasWidth = Math.min(window.innerWidth, 640);
+        canvasHeight = Math.min(window.innerHeight, 480);
+        canvas.width = canvasWidth;
+        canvas.height = canvasHeight;
+        // Styling tetap full screen
+        canvas.style.width = '100%';
+        canvas.style.height = '100%';
       }
       window.addEventListener('resize', resizeCanvas);
       resizeCanvas();
 
-      // Variabel untuk menyimpan landmark tangan
+      // --- VARIABEL ---
       let rightHandLandmarks = null;
       let leftHandLandmarks = null;
+      let frameCount = 0;
+      let lastFpsUpdate = performance.now();
 
-      // --- FUNGSI GAMBAR TALI ---
+      // --- FUNGSI GAMBAR TALI (DIOPTIMALKAN) ---
       function drawString() {
-        // Hapus gambar sebelumnya
+        // Hanya clear area yang diperlukan
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
         if (rightHandLandmarks && leftHandLandmarks) {
-          // Ambil titik ujung jari telunjuk (index 8)
-          const rightIndexTip = rightHandLandmarks[8];
-          const leftIndexTip = leftHandLandmarks[8];
+          const rightIndex = rightHandLandmarks[8];
+          const leftIndex = leftHandLandmarks[8];
 
-          // Hitung koordinat di Canvas
-          const xRight = rightIndexTip.x * canvas.width;
-          const yRight = rightIndexTip.y * canvas.height;
-          const xLeft = leftIndexTip.x * canvas.width;
-          const yLeft = leftIndexTip.y * canvas.height;
+          // Koordinat di Canvas (resolusi lebih kecil)
+          const xRight = rightIndex.x * canvas.width;
+          const yRight = rightIndex.y * canvas.height;
+          const xLeft = leftIndex.x * canvas.width;
+          const yLeft = leftIndex.y * canvas.height;
 
-          // Gambar garis "tali"
+          // Gambar tali - HAPUS shadow untuk performa lebih baik
           ctx.beginPath();
           ctx.moveTo(xRight, yRight);
           ctx.lineTo(xLeft, yLeft);
           ctx.strokeStyle = '#FF3366';
-          ctx.lineWidth = 8;
-          ctx.shadowColor = '#FF3366';
-          ctx.shadowBlur = 15;
+          ctx.lineWidth = 6;
           ctx.stroke();
 
-          // Gambar lingkaran di ujung tali
-          ctx.shadowBlur = 20;
+          // Lingkaran di ujung - tanpa shadow
           ctx.fillStyle = '#FFD700';
           ctx.beginPath();
-          ctx.arc(xRight, yRight, 12, 0, 2 * Math.PI);
+          ctx.arc(xRight, yRight, 10, 0, 2 * Math.PI);
           ctx.fill();
           ctx.beginPath();
-          ctx.arc(xLeft, yLeft, 12, 0, 2 * Math.PI);
+          ctx.arc(xLeft, yLeft, 10, 0, 2 * Math.PI);
           ctx.fill();
         }
       }
 
-      // --- INISIALISASI MEDIAPIPE ---
+      // --- INISIALISASI MEDIAPIPE (PAKAI MODEL RINGAN) ---
       const hands = new Hands({
         locateFile: (file) => {
           return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
@@ -125,21 +146,19 @@
 
       hands.setOptions({
         maxNumHands: 2,
-        modelComplexity: 1,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5
+        modelComplexity: 0, // 🔥 PAKAI MODEL RINGAN (0 = Lite, 1 = Full)
+        minDetectionConfidence: 0.7, // Lebih tinggi = lebih stabil
+        minTrackingConfidence: 0.6
       });
 
-      // Callback ketika MediaPipe selesai memproses frame
+      // --- CALLBACK HASIL ---
       hands.onResults((results) => {
-        // Reset data tangan
         rightHandLandmarks = null;
         leftHandLandmarks = null;
 
         if (results.multiHandLandmarks && results.multiHandedness) {
           for (let i = 0; i < results.multiHandLandmarks.length; i++) {
             const landmarks = results.multiHandLandmarks[i];
-            // PERHATIKAN: Cara mengakses label tangan yang benar
             const label = results.multiHandedness[i].label;
 
             if (label === 'Right') {
@@ -150,21 +169,31 @@
           }
         }
 
-        // Panggil fungsi untuk menggambar tali
+        // Gambar tali setiap frame
         drawString();
+
+        // Update FPS counter
+        frameCount++;
+        const now = performance.now();
+        if (now - lastFpsUpdate > 1000) {
+          fpsDisplay.textContent = `FPS: ${frameCount}`;
+          frameCount = 0;
+          lastFpsUpdate = now;
+        }
       });
 
-      // --- MULAI KAMERA ---
+      // --- KAMERA DENGAN RESOLUSI RENDAH ---
       const camera = new Camera(video, {
         onFrame: async () => {
           await hands.send({ image: video });
         },
-        width: 640,
-        height: 480
+        width: 320, // 🔥 Resolusi lebih kecil = lebih cepat
+        height: 240,
+        facingMode: "user"
       });
       camera.start();
 
-      console.log('Aplikasi pelacakan tangan siap!');
+      console.log('Optimasi: Model Lite + Resolusi Rendah');
     })();
   </script>
 </body>
