@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Pelacakan Tangan - Optimasi</title>
+  <title>Pelacakan Tangan - Tali Presisi</title>
   <style>
     body {
       margin: 0;
@@ -31,7 +31,7 @@
       width: 100%;
       height: 100%;
       pointer-events: none;
-      transform: scaleX(-1);
+      /* JANGAN DI BALIK DI SINI! Kita akan balik secara manual di JS */
     }
     .info {
       position: absolute;
@@ -74,70 +74,96 @@
   
   <script>
     (function() {
-      // --- ELEMEN ---
       const video = document.getElementById('webcam');
       const canvas = document.getElementById('overlay');
       const ctx = canvas.getContext('2d');
       const fpsDisplay = document.getElementById('fps');
 
-      // --- UKURAN CANVAS (DIKECILKAN UNTUK PERFORMANCE) ---
+      // --- UKURAN CANVAS SAMA DENGAN VIDEO ---
       let canvasWidth = 640;
       let canvasHeight = 480;
       
       function resizeCanvas() {
-        // Gunakan resolusi lebih kecil untuk performa lebih baik
+        // Canvas menggunakan resolusi tetap untuk konsistensi
         canvasWidth = Math.min(window.innerWidth, 640);
         canvasHeight = Math.min(window.innerHeight, 480);
         canvas.width = canvasWidth;
         canvas.height = canvasHeight;
-        // Styling tetap full screen
         canvas.style.width = '100%';
         canvas.style.height = '100%';
       }
       window.addEventListener('resize', resizeCanvas);
       resizeCanvas();
 
-      // --- VARIABEL ---
       let rightHandLandmarks = null;
       let leftHandLandmarks = null;
       let frameCount = 0;
       let lastFpsUpdate = performance.now();
 
-      // --- FUNGSI GAMBAR TALI (DIOPTIMALKAN) ---
+      // --- FUNGSI GAMBAR TALI (DENGAN KOORDINAT YANG BENAR) ---
       function drawString() {
-        // Hanya clear area yang diperlukan
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
         if (rightHandLandmarks && leftHandLandmarks) {
           const rightIndex = rightHandLandmarks[8];
           const leftIndex = leftHandLandmarks[8];
 
-          // Koordinat di Canvas (resolusi lebih kecil)
-          const xRight = rightIndex.x * canvas.width;
+          // 🔥 PERBAIKAN UTAMA: Balik koordinat X agar sesuai dengan video mirror
+          // MediaPipe memberi koordinat 0-1 (0=kiri asli, 1=kanan asli)
+          // Karena video di-mirror, kita balik: x = 1 - x
+          const xRight = (1 - rightIndex.x) * canvas.width;
           const yRight = rightIndex.y * canvas.height;
-          const xLeft = leftIndex.x * canvas.width;
+          const xLeft = (1 - leftIndex.x) * canvas.width;
           const yLeft = leftIndex.y * canvas.height;
 
-          // Gambar tali - HAPUS shadow untuk performa lebih baik
+          // Gambar tali
           ctx.beginPath();
           ctx.moveTo(xRight, yRight);
           ctx.lineTo(xLeft, yLeft);
           ctx.strokeStyle = '#FF3366';
-          ctx.lineWidth = 6;
+          ctx.lineWidth = 8;
+          ctx.shadowColor = '#FF3366';
+          ctx.shadowBlur = 20;
           ctx.stroke();
 
-          // Lingkaran di ujung - tanpa shadow
+          // Lingkaran di ujung
+          ctx.shadowBlur = 25;
           ctx.fillStyle = '#FFD700';
           ctx.beginPath();
-          ctx.arc(xRight, yRight, 10, 0, 2 * Math.PI);
+          ctx.arc(xRight, yRight, 14, 0, 2 * Math.PI);
           ctx.fill();
           ctx.beginPath();
-          ctx.arc(xLeft, yLeft, 10, 0, 2 * Math.PI);
+          ctx.arc(xLeft, yLeft, 14, 0, 2 * Math.PI);
           ctx.fill();
+
+          // Tambahan: Gambar titik di semua jari untuk debugging
+          // Bisa dihapus jika sudah yakin
+          ctx.shadowBlur = 0;
+          ctx.fillStyle = 'rgba(0, 255, 0, 0.3)';
+          if (rightHandLandmarks) {
+            for (let i = 0; i < rightHandLandmarks.length; i++) {
+              const lm = rightHandLandmarks[i];
+              const x = (1 - lm.x) * canvas.width;
+              const y = lm.y * canvas.height;
+              ctx.beginPath();
+              ctx.arc(x, y, 3, 0, 2 * Math.PI);
+              ctx.fill();
+            }
+          }
+          if (leftHandLandmarks) {
+            for (let i = 0; i < leftHandLandmarks.length; i++) {
+              const lm = leftHandLandmarks[i];
+              const x = (1 - lm.x) * canvas.width;
+              const y = lm.y * canvas.height;
+              ctx.beginPath();
+              ctx.arc(x, y, 3, 0, 2 * Math.PI);
+              ctx.fill();
+            }
+          }
         }
       }
 
-      // --- INISIALISASI MEDIAPIPE (PAKAI MODEL RINGAN) ---
+      // --- INISIALISASI MEDIAPIPE ---
       const hands = new Hands({
         locateFile: (file) => {
           return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
@@ -146,12 +172,11 @@
 
       hands.setOptions({
         maxNumHands: 2,
-        modelComplexity: 0, // 🔥 PAKAI MODEL RINGAN (0 = Lite, 1 = Full)
-        minDetectionConfidence: 0.7, // Lebih tinggi = lebih stabil
+        modelComplexity: 0,
+        minDetectionConfidence: 0.7,
         minTrackingConfidence: 0.6
       });
 
-      // --- CALLBACK HASIL ---
       hands.onResults((results) => {
         rightHandLandmarks = null;
         leftHandLandmarks = null;
@@ -169,10 +194,8 @@
           }
         }
 
-        // Gambar tali setiap frame
         drawString();
 
-        // Update FPS counter
         frameCount++;
         const now = performance.now();
         if (now - lastFpsUpdate > 1000) {
@@ -182,18 +205,18 @@
         }
       });
 
-      // --- KAMERA DENGAN RESOLUSI RENDAH ---
+      // --- KAMERA ---
       const camera = new Camera(video, {
         onFrame: async () => {
           await hands.send({ image: video });
         },
-        width: 320, // 🔥 Resolusi lebih kecil = lebih cepat
+        width: 320,
         height: 240,
         facingMode: "user"
       });
       camera.start();
 
-      console.log('Optimasi: Model Lite + Resolusi Rendah');
+      console.log('✅ Tali presisi dengan koordinat mirror siap!');
     })();
   </script>
 </body>
